@@ -118,7 +118,7 @@ def show_grid(pos, path, blocked, closed):
 
 
 history = {"readiness": [readiness], "energy": [energy], "stress": [stress]}
-log, event_slots, trails = [], [], []
+log, event_slots, trails, info = [], [], [], []
 
 print("\nGOAL: reach", GOAL, "% readiness")
 print("MAP : @ agent | # wall | X blocked path | * route taken | lowercase = closed place")
@@ -162,6 +162,7 @@ for slot in range(1, slots + 1):
     pos = best_path[-1]
     show_grid(pos, set(best_path), blocked, closed)
 
+    before = (readiness, energy, stress)
     readiness, energy, stress = predict(readiness, energy, stress, best, steps, last_action)
     last_action = best
     history["readiness"].append(readiness)
@@ -169,6 +170,7 @@ for slot in range(1, slots + 1):
     history["stress"].append(stress)
     log.append((slot, event, best))
     trails.append(best_path)
+    info.append((event, closed, blocked, best, best_path, before, (readiness, energy, stress)))
 
     if readiness >= GOAL:
         print(f"\nGoal reached at slot {slot}!")
@@ -179,58 +181,85 @@ print("\n" + "=" * 70)
 print("AI Decision Summary:", result, f"(final readiness {readiness:.0f}%)")
 
 # ------------------------------------------------------------
-# Display: campus grid (left) + state graph (right)
+# ANIMATION: watch the agent walk on the 8x8 grid, slot by slot
 # ------------------------------------------------------------
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6.5),
-                               gridspec_kw={"width_ratios": [1, 1.2]})
+from matplotlib.animation import FuncAnimation, PillowWriter
 
-# ---- Grid view
-for x in range(W):
-    for y in range(H):
-        ax1.add_patch(Rectangle((x, y), 1, 1, facecolor="white", edgecolor="lightgray"))
-for (x, y) in walls:
-    ax1.add_patch(Rectangle((x, y), 1, 1, facecolor="#555555", edgecolor="white"))
-for name, (x, y) in places.items():
-    ax1.add_patch(Rectangle((x, y), 1, 1, facecolor=place_color[name], edgecolor="black"))
-    ax1.text(x + 0.5, y + 0.5, name.replace(" ", "\n"), ha="center", va="center",
-             fontsize=7, fontweight="bold")
-colors = plt.cm.plasma([i / max(1, len(trails)) for i in range(len(trails))])
-for i, path in enumerate(trails):
-    xs = [p[0] + 0.5 + (i % 3 - 1) * 0.08 for p in path]
-    ys = [p[1] + 0.5 + (i % 3 - 1) * 0.08 for p in path]
-    ax1.plot(xs, ys, color=colors[i], linewidth=2, alpha=0.7)
-    ax1.text(xs[-1], ys[-1] - 0.3, str(i + 1), fontsize=7, color="white",
-             ha="center", bbox=dict(boxstyle="circle", facecolor=colors[i], pad=0.15))
-ax1.plot(start[0] + 0.5, start[1] + 0.9, "k^", markersize=8)
-ax1.plot(pos[0] + 0.5, pos[1] + 0.5, "r*", markersize=18)
-ax1.set_xlim(0, W)
-ax1.set_ylim(H, 0)
-ax1.set_aspect("equal")
-ax1.set_xticks(range(W + 1))
-ax1.set_yticks(range(H + 1))
-ax1.set_title("Campus Grid: Agent's Route (numbers = slot, red star = final position)", fontsize=10)
+# Build the frames: every walking step, then a pause while the action is done
+frames = []
+for i, (_, _, _, _, path, _, _) in enumerate(info):
+    frames += [(i, k, "walk") for k in range(len(path))]
+    frames += [(i, len(path) - 1, "act")] * 3
+frames += [(len(info) - 1, len(info[-1][4]) - 1, "done")] * 5
 
-# ---- Graph view
-x = list(range(len(history["readiness"])))
-ax2.plot(x, history["readiness"], marker="o", linewidth=2, label="Readiness", color="green")
-ax2.plot(x, history["energy"], marker="s", label="Energy", color="orange")
-ax2.plot(x, history["stress"], marker="^", label="Stress", color="red")
-ax2.axhline(GOAL, linestyle="--", color="gray", label=f"Goal ({GOAL}%)")
-for slot, event, action in log:
-    ax2.annotate(action, (slot, history["readiness"][slot]), textcoords="offset points",
-                 xytext=(0, 8), ha="center", fontsize=6, rotation=45)
-for s in event_slots:
-    ax2.axvline(s - 0.5, color="purple", alpha=0.25)
-ax2.set_xlabel("Study slot")
-ax2.set_ylabel("Level (0-100)")
-ax2.set_ylim(0, 120)
-ax2.legend(loc="upper left", fontsize=8)
-ax2.set_title("Readiness, Energy and Stress (purple lines = random events)", fontsize=10)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6.5), gridspec_kw={"width_ratios": [1, 1.2]})
 
-fig.suptitle("AI EXAM PREP AGENT - Goal-Based Decisions on a Campus Grid",
-             fontsize=15, fontweight="bold")
-fig.text(0.5, 0.01, "Decision: " + result, ha="center", fontsize=11,
-         bbox=dict(boxstyle="round", facecolor="lightgreen"))
-plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-plt.savefig("exam_prep_agent_output.png", dpi=150)
+
+def update(f):
+    i, k, phase = frames[f]
+    event, closed, blocked, action, path, before, after = info[i]
+    ax1.clear()
+    ax2.clear()
+
+    # ---- grid
+    for x in range(W):
+        for y in range(H):
+            ax1.add_patch(Rectangle((x, y), 1, 1, facecolor="white", edgecolor="lightgray"))
+    for (x, y) in walls:
+        ax1.add_patch(Rectangle((x, y), 1, 1, facecolor="#555555", edgecolor="white"))
+    for (x, y) in blocked:
+        ax1.add_patch(Rectangle((x, y), 1, 1, facecolor="#fdae6b", edgecolor="black"))
+        ax1.text(x + 0.5, y + 0.5, "X", ha="center", va="center", fontweight="bold")
+    for name, (x, y) in places.items():
+        col = "#fb9a99" if name == closed else place_color[name]
+        ax1.add_patch(Rectangle((x, y), 1, 1, facecolor=col, edgecolor="black"))
+        label = name.replace(" ", "\n") + ("\nCLOSED" if name == closed else "")
+        ax1.text(x + 0.5, y + 0.5, label, ha="center", va="center", fontsize=7, fontweight="bold")
+    for j in range(i):                                   # earlier routes (faded)
+        p = info[j][4]
+        ax1.plot([c[0] + 0.5 for c in p], [c[1] + 0.5 for c in p], color="gray", alpha=0.3, linewidth=2)
+    walked = path[:k + 1]                                # current route so far
+    ax1.plot([c[0] + 0.5 for c in walked], [c[1] + 0.5 for c in walked],
+             color="royalblue", linewidth=3, marker=".", markersize=8)
+    ax1.plot(path[k][0] + 0.5, path[k][1] + 0.5, "r*", markersize=26, markeredgecolor="black")
+    ax1.set_xlim(0, W)
+    ax1.set_ylim(H, 0)
+    ax1.set_aspect("equal")
+    ax1.set_xticks(range(W + 1))
+    ax1.set_yticks(range(H + 1))
+    ax1.set_title(f"SLOT {i + 1}  |  Event: {event}", fontsize=11, fontweight="bold")
+    if phase == "walk":
+        status = f"Walking to {actions[action][3]}...  (step {k}/{len(path) - 1})"
+    elif phase == "act":
+        status = f"Doing: {action}"
+    else:
+        status = result
+    ax1.set_xlabel(status, fontsize=12, fontweight="bold")
+
+    # ---- graph (drawn up to the current slot)
+    n = i + (1 if phase != "walk" else 0)
+    xs = list(range(n + 1))
+    ax2.plot(xs, history["readiness"][:n + 1], marker="o", linewidth=2, label="Readiness", color="green")
+    ax2.plot(xs, history["energy"][:n + 1], marker="s", label="Energy", color="orange")
+    ax2.plot(xs, history["stress"][:n + 1], marker="^", label="Stress", color="red")
+    ax2.axhline(GOAL, linestyle="--", color="gray", label=f"Goal ({GOAL}%)")
+    ax2.set_xlim(-0.5, len(info) + 0.5)
+    ax2.set_ylim(0, 120)
+    ax2.set_xlabel("Study slot")
+    ax2.set_ylabel("Level (0-100)")
+    ax2.legend(loc="upper left", fontsize=8)
+    r_, e_, s_ = after if phase != "walk" else before
+    ax2.text(0.98, 0.04, f"Readiness {r_:.0f}%   Energy {e_:.0f}   Stress {s_:.0f}",
+             transform=ax2.transAxes, ha="right", fontsize=11,
+             bbox=dict(boxstyle="round", facecolor="lightyellow"))
+    ax2.set_title("Agent state over time", fontsize=11)
+
+
+fig.suptitle("AI EXAM PREP AGENT - Goal-Based Movement on 8x8 Campus Grid", fontsize=15, fontweight="bold")
+anim = FuncAnimation(fig, update, frames=len(frames), interval=350, repeat=False)
+
+# Save backups (GIF animation + final picture), then play it live
+anim.save("exam_prep_agent_animation.gif", writer=PillowWriter(fps=3), dpi=70)
+update(len(frames) - 1)
+fig.savefig("exam_prep_agent_output.png", dpi=130)
 plt.show()
